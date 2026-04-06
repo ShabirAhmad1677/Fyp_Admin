@@ -31,6 +31,7 @@ export default function Billboards() {
     })
     const [imageFile, setImageFile] = useState(null)
     const [targetFile, setTargetFile] = useState(null)
+    const [glbFile, setGlbFile] = useState(null)
     const [editingId, setEditingId] = useState(null)
 
     useEffect(() => {
@@ -116,8 +117,22 @@ export default function Billboards() {
         )
     }
 
+    const validateFile = (file, type) => {
+        const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+        if (file.size > MAX_SIZE) {
+            alert(`File "${file.name}" is too large. Max limit is 5MB.`);
+            return false;
+        }
+        if (type === 'glb' && !file.name.toLowerCase().endsWith('.glb')) {
+            alert('Please upload a valid .glb 3D model.');
+            return false;
+        }
+        return true;
+    };
+
     const compressImage = async (file) => {
         if (!file) return null;
+        if (!validateFile(file, 'image')) return null;
         const options = {
             maxSizeMB: 1,
             maxWidthOrHeight: 1920,
@@ -166,8 +181,21 @@ export default function Billboards() {
                     .upload(`targets/${fileName}`, compressedTarget)
 
                 if (targetError) throw targetError
-                const { data: targetData } = supabase.storage.from('billboards').getPublicUrl(fileName)
+                const { data: targetData } = supabase.storage.from('billboards').getPublicUrl(`targets/${fileName}`)
                 targetUrl = targetData.publicUrl
+            }
+
+            let glbUrl = null
+            // 3. Upload GLB Asset
+            if (glbFile) {
+                const fileName = `${Date.now()}-model.glb`
+                const { error: glbError } = await supabase.storage
+                    .from('billboards')
+                    .upload(`models/${fileName}`, glbFile)
+
+                if (glbError) throw glbError
+                const { data: glbData } = supabase.storage.from('billboards').getPublicUrl(`models/${fileName}`)
+                glbUrl = glbData.publicUrl
             }
 
             // --- Phase 1: ATOMIC TRANSACTION (RPC) ---
@@ -182,7 +210,7 @@ export default function Billboards() {
                 p_image_target_url: targetUrl || (editingId ? undefined : ''),
                 p_physical_width: parseFloat(form.physical_width || '1.0'),
                 p_cloud_anchor_id: form.cloud_anchor_id || null,
-                p_glb_asset_url: form.glb_asset_url || null,
+                p_glb_asset_url: glbUrl || form.glb_asset_url || null,
                 p_business_name: form.business,
                 p_title: form.title,
                 p_description: form.full_description,
@@ -213,6 +241,7 @@ export default function Billboards() {
         setForm({ title: '', business: '', category: 'Retail', city: 'Mardan', latitude: '', longitude: '', full_description: '', contact: '', features: '', hours: '', discount: '', image_target_url: '', physical_width: '1.0', cloud_anchor_id: '', glb_asset_url: '' })
         setImageFile(null)
         setTargetFile(null)
+        setGlbFile(null)
         setEditingId(null)
     }
 
@@ -547,13 +576,54 @@ export default function Billboards() {
                                             <p className="text-xs text-muted" style={{ marginTop: '0.25rem' }}>This ID connects the billboard to its 3D physical location.</p>
                                         </div>
                                         <div>
-                                            <label className="text-sm text-muted">GLB Model URL (3D Asset)</label>
+                                            <label className="text-sm text-muted">3D Model (.glb) - Max 5MB</label>
+                                            <div
+                                                style={{
+                                                    border: '2px dashed var(--border)',
+                                                    borderRadius: '12px',
+                                                    padding: '1.5rem',
+                                                    textAlign: 'center',
+                                                    cursor: 'pointer',
+                                                    background: 'rgba(0,0,0,0.2)',
+                                                    transition: 'all 0.2s ease',
+                                                    borderColor: glbFile ? 'var(--success)' : 'var(--border)',
+                                                    marginBottom: '0.5rem'
+                                                }}
+                                                onClick={() => document.getElementById('glbUpload').click()}
+                                                onMouseOver={e => e.currentTarget.style.borderColor = 'var(--primary)'}
+                                                onMouseOut={e => e.currentTarget.style.borderColor = glbFile ? 'var(--success)' : 'var(--border)'}
+                                            >
+                                                {glbFile ? (
+                                                    <div style={{ color: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                                        <Check size={20} />
+                                                        <span className="text-sm font-medium">{glbFile.name} ({(glbFile.size / 1024 / 1024).toFixed(2)}MB)</span>
+                                                    </div>
+                                                ) : (
+                                                    <>
+                                                        <Upload className="mx-auto text-muted" style={{ display: 'block', margin: '0 auto 0.5rem auto' }} />
+                                                        <span className="text-muted text-sm">Upload 3D Asset (.glb)</span>
+                                                    </>
+                                                )}
+                                                <input 
+                                                    id="glbUpload" 
+                                                    type="file" 
+                                                    accept=".glb" 
+                                                    hidden 
+                                                    onChange={(e) => {
+                                                        const file = e.target.files[0];
+                                                        if (file && validateFile(file, 'glb')) {
+                                                            setGlbFile(file);
+                                                        }
+                                                    }} 
+                                                />
+                                            </div>
                                             <input
                                                 value={form.glb_asset_url}
                                                 onChange={e => setForm({ ...form, glb_asset_url: e.target.value })}
-                                                placeholder="https://.../model.glb"
+                                                placeholder="Or paste external .glb URL"
+                                                style={{ fontSize: '0.8rem', opacity: 0.7 }}
                                             />
-                                            <p className="text-xs text-muted" style={{ marginTop: '0.25rem' }}>Direct link to the .glb 3D model shown in AR.</p>
+                                            <p className="text-xs text-muted" style={{ marginTop: '0.25rem' }}>Direct upload is recommended for stability.</p>
                                         </div>
                                     </div>
                                 </div>
