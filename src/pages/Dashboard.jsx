@@ -1,11 +1,18 @@
 
 import { useEffect, useState } from 'react'
 import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import { Eye, TrendingUp, Activity, Bookmark, Zap, Info, Wallet, Loader2 } from 'lucide-react'
+import { Eye, TrendingUp, Activity, Bookmark, Zap, Info, Wallet, Loader2, Filter } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 export default function Dashboard() {
     const [loading, setLoading] = useState(true)
+    const [businesses, setBusinesses] = useState([])
+    const [selectedBusiness, setSelectedBusiness] = useState('All Businesses')
+    const [allData, setAllData] = useState({
+        billboards: [],
+        analytics: [],
+        merchantOffers: []
+    })
     const [metrics, setMetrics] = useState({
         totalViews: 0,
         totalClaims: 0,
@@ -21,118 +28,202 @@ export default function Dashboard() {
         fetchDashboardData()
     }, [])
 
+    useEffect(() => {
+        if (!loading) {
+            calculateMetrics()
+        }
+    }, [selectedBusiness, allData])
+
     const fetchDashboardData = async () => {
         try {
             setLoading(true)
-
             const { data: { user } } = await supabase.auth.getUser()
             if (!user) return
 
-            // 1. Fetch Merchant's Billboards
-            const { data: billboards } = await supabase
+            // 1. Fetch Merchant's Billboards with Error Logging
+            const { data: billboards, error: bbError } = await supabase
                 .from('billboards')
-                .select('id, is_active, category')
+                // Removed 'is_active' just in case it was causing a silent column error. 
+                // If you know it's on the billboards table, you can add it back.
+                .select('id, category, campaigns(business_name, is_active)')
                 .eq('owner_id', user.id)
+
+            if (bbError) {
+                console.error('❌ Supabase Error fetching billboards:', bbError.message)
+            }
 
             const billboardIds = billboards?.map(b => b.id) || []
 
-            // 2. Fetch Actual Saved Offers (Claims) for these billboards
-            const { data: savedOffers } = await supabase
-                .from('saved_offers')
-                .select('is_redeemed, created_at')
-                .in('campaign_id', 
-                    billboards?.flatMap(b => b.campaign_id) || [] // Assuming campaigns are linked
-                )
-            
-            // Re-fetching offers by billboard link to be safer
-            const { data: merchantOffers } = await supabase
+            // ROBUST EXTRACTION: Safely handle both arrays and objects
+            const bizNames = [...new Set(
+                billboards?.flatMap(b => {
+                    if (!b.campaigns) return [];
+                    // If Supabase returns an array of campaigns
+                    if (Array.isArray(b.campaigns)) return b.campaigns.map(c => c.business_name);
+                    // If Supabase returns a single object
+                    return [b.campaigns.business_name];
+                }).filter(Boolean)
+            )]
+
+            setBusinesses(['All Businesses', ...bizNames.sort()])
+
+            // 2. Fetch Actual Saved Offers
+            const { data: merchantOffers, error: offerError } = await supabase
                 .from('saved_offers')
                 .select('id, is_redeemed, created_at, billboard_id')
-                .in('billboard_id', billboardIds)
+                .in('billboard_id', billboardIds.length > 0 ? billboardIds : ['00000000-0000-0000-0000-000000000000'])
 
-            // 3. Fetch analytics for real views
-            const { data: analytics } = await supabase
+            if (offerError) console.error('❌ Supabase Error fetching offers:', offerError.message)
+
+            // 3. Fetch analytics
+            const { data: analytics, error: analyticsError } = await supabase
                 .from('analytics_events')
-                .select('event_type, created_at')
-                .in('billboard_id', billboardIds)
+                .select('event_type, created_at, billboard_id')
+                .in('billboard_id', billboardIds.length > 0 ? billboardIds : ['00000000-0000-0000-0000-000000000000'])
                 .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
 
-            // Calculate Funnel Metrics
-            const claims = merchantOffers?.length || 0
-            const redemptions = merchantOffers?.filter(o => o.is_redeemed).length || 0
-            const totalViews = analytics?.filter(e => ['view', 'map_view'].includes(e.event_type)).length || 0
-            const activeCount = billboards?.filter(b => b.is_active).length || 0
+            if (analyticsError) console.error('❌ Supabase Error fetching analytics:', analyticsError.message)
 
-            // ROI: Sales / Views
-            const conversion = totalViews > 0 ? ((redemptions / totalViews) * 100) : 0
-
-            setMetrics({
-                totalViews: totalViews,
-                totalClaims: claims,
-                totalRedemptions: redemptions,
-                conversionRate: conversion.toFixed(1),
-                activeCampaigns: activeCount
+            setAllData({
+                billboards: billboards || [],
+                analytics: analytics || [],
+                merchantOffers: merchantOffers || []
             })
-
-            // --- Engagement Data (Last 7 Days) ---
-            const last7Days = [...Array(7)].map((_, i) => {
-                const d = new Date()
-                d.setDate(d.getDate() - (6 - i))
-                const dateStr = d.toISOString().split('T')[0]
-                return {
-                    name: d.toLocaleDateString('en-US', { weekday: 'short' }),
-                    date: dateStr,
-                    views: 0,
-                    claims: 0,
-                    redemptions: 0
-                }
-            })
-
-            analytics?.forEach(e => {
-                const date = e.created_at.split('T')[0]
-                const day = last7Days.find(d => d.date === date)
-                if (day && ['view', 'map_view'].includes(e.event_type)) day.views++
-            })
-
-            merchantOffers?.forEach(o => {
-                const date = o.created_at.split('T')[0]
-                const day = last7Days.find(d => d.date === date)
-                if (day) {
-                    day.claims++
-                    if (o.is_redeemed) day.redemptions++
-                }
-            })
-
-            setEngagementData(last7Days)
-
-            // --- Interests Data (By Category) ---
-            const categories = {}
-            billboards?.forEach(b => {
-                if (b.category) categories[b.category] = (categories[b.category] || 0) + 1
-            })
-            const pieData = Object.keys(categories).map(key => ({ name: key, value: categories[key] }))
-            setInterestData(pieData)
-            
-            // Insight helper:
-            if (totalViews > 0) {
-                setInsightText(`Your billboards have reached ${totalViews} users in the last 30 days with a ${conversion.toFixed(1)}% sales conversion.`)
-            } else {
-                setInsightText("Interactive map views will appear here as users discover your billboards.")
-            }
 
         } catch (error) {
-            console.error('Error loading dashboard:', error)
+            console.error('❌ Error loading dashboard:', error)
         } finally {
             setLoading(false)
         }
     }
+
+    const calculateMetrics = () => {
+        const { billboards, analytics, merchantOffers } = allData
+
+        // ROBUST FILTERING
+        const filteredBillboards = selectedBusiness === 'All Businesses'
+            ? billboards
+            : billboards.filter(b => {
+                if (!b.campaigns) return false;
+                if (Array.isArray(b.campaigns)) {
+                    return b.campaigns.some(c => c.business_name === selectedBusiness);
+                }
+                return b.campaigns.business_name === selectedBusiness;
+            })
+
+        const filteredBillboardIds = filteredBillboards.map(b => b.id)
+
+        // Filter related data by filtered billboard IDs
+        const filteredAnalytics = analytics.filter(e => filteredBillboardIds.includes(e.billboard_id))
+        const filteredOffers = merchantOffers.filter(o => filteredBillboardIds.includes(o.billboard_id))
+
+        // Calculate Funnel Metrics
+        const claims = filteredOffers.length
+        const redemptions = filteredOffers.filter(o => o.is_redeemed).length
+        const totalViews = filteredAnalytics.filter(e => ['view', 'map_view', 'proximity', 'ar_view_3s'].includes(e.event_type)).length
+
+        // Count active billboards (Checking if any linked campaign is active)
+        const activeCount = filteredBillboards.filter(b => {
+            if (Array.isArray(b.campaigns)) return b.campaigns.some(c => c.is_active);
+            return b.campaigns?.is_active;
+        }).length
+
+        // ROI: Sales / Views
+        const conversion = totalViews > 0 ? ((redemptions / totalViews) * 100) : 0
+
+        setMetrics({
+            totalViews: totalViews,
+            totalClaims: claims,
+            totalRedemptions: redemptions,
+            conversionRate: conversion.toFixed(1),
+            activeCampaigns: activeCount
+        })
+
+        // --- Engagement Data (Last 7 Days) ---
+        const last7Days = [...Array(7)].map((_, i) => {
+            const d = new Date()
+            d.setDate(d.getDate() - (6 - i))
+            const dateStr = d.toISOString().split('T')[0]
+            return {
+                name: d.toLocaleDateString('en-US', { weekday: 'short' }),
+                date: dateStr,
+                views: 0,
+                claims: 0,
+                redemptions: 0
+            }
+        })
+
+        filteredAnalytics.forEach(e => {
+            if (!e.created_at) return;
+            const date = e.created_at.split('T')[0]
+            const day = last7Days.find(d => d.date === date)
+            if (day && ['view', 'map_view', 'proximity', 'ar_view_3s'].includes(e.event_type)) day.views++
+        })
+
+        filteredOffers.forEach(o => {
+            if (!o.created_at) return;
+            const date = o.created_at.split('T')[0]
+            const day = last7Days.find(d => d.date === date)
+            if (day) {
+                day.claims++
+                if (o.is_redeemed) day.redemptions++
+            }
+        })
+
+        setEngagementData(last7Days)
+
+        // --- Interests Data (By Category) ---
+        const categories = {}
+        filteredBillboards.forEach(b => {
+            if (b.category) categories[b.category] = (categories[b.category] || 0) + 1
+        })
+        const pieData = Object.keys(categories).map(key => ({ name: key, value: categories[key] }))
+        setInterestData(pieData)
+
+        // Insight helper:
+        if (totalViews > 0) {
+            setInsightText(`Your ${selectedBusiness === 'All Businesses' ? 'billboards' : selectedBusiness + ' ads'} have reached ${totalViews} users in the last 30 days with a ${conversion.toFixed(1)}% sales conversion.`)
+        } else {
+            setInsightText("Interactive map views will appear here as users discover your billboards.")
+        }
+    }
+
     const COLORS = ['#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444']
 
     return (
         <div className="container">
-            <header style={{ marginBottom: '2rem' }}>
-                <h1 style={{ textShadow: '0 0 20px rgba(139, 92, 246, 0.3)' }}>Overview</h1>
-                <p className="text-muted">Real-time AR performance metrics</p>
+            <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                    <h1 style={{ textShadow: '0 0 20px rgba(139, 92, 246, 0.3)' }}>Overview</h1>
+                    <p className="text-muted">Real-time AR performance metrics</p>
+                </div>
+
+                {/* Business Filter Dropdown */}
+                {!loading && businesses.length > 0 && (
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                        <Filter size={16} className="text-muted" />
+                        <select
+                            value={selectedBusiness}
+                            onChange={(e) => setSelectedBusiness(e.target.value)}
+                            style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: 'var(--text)',
+                                fontSize: '0.9rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                outline: 'none',
+                                paddingRight: '0.5rem'
+                            }}
+                        >
+                            {businesses.map(biz => (
+                                <option key={biz} value={biz} style={{ background: '#1e293b', color: '#fff' }}>
+                                    {biz}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                )}
             </header>
 
             {loading ? (

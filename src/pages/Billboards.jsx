@@ -61,7 +61,7 @@ export default function Billboards() {
             .from('analytics_events')
             .select('billboard_id, event_type')
             .in('billboard_id', billboardIds)
-            .in('event_type', ['view', 'map_view', 'ar_view_3s'])
+            .in('event_type', ['view', 'map_view', 'proximity', 'ar_view_3s'])
 
         // Aggregate views by ID
         const viewCounts = {}
@@ -82,7 +82,8 @@ export default function Billboards() {
                     features: active?.features || [],
                     hours: active?.hours || '',
                     discount: active?.discount || '',
-                    views: viewCounts[b.id] || 0 // Actual live count
+                    views: viewCounts[b.id] || 0, // Actual live count
+                    is_active: active ? active.is_active : b.is_active // Use campaign status or fallback to billboard status
                 }
             })
             setBillboards(flattened)
