@@ -1,25 +1,48 @@
 import { useState, useEffect } from 'react'
-import { Scanner as QrScanner } from '@yudiel/react-qr-scanner'
-import { Scan, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { CheckCircle, XCircle, Loader2, ClipboardCheck, History, Calendar, Tag } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 export default function Scanner() {
-    const [scanResult, setScanResult] = useState(null)
     const [status, setStatus] = useState('idle') // idle, processing, success, error
     const [message, setMessage] = useState('')
-    const [cameraLoading, setCameraLoading] = useState(true)
     const [manualCode, setManualCode] = useState('')
+    const [history, setHistory] = useState([])
+    const [loadingHistory, setLoadingHistory] = useState(true)
 
-    const handleScan = async (detectedCodes) => {
-        if (detectedCodes && detectedCodes.length > 0 && status === 'idle') {
-            const code = detectedCodes[0].rawValue
-            processCode(code)
+    useEffect(() => {
+        fetchHistory()
+    }, [])
+
+    const fetchHistory = async () => {
+        try {
+            setLoadingHistory(true)
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) return
+
+            // Fetch last 10 redemptions for this merchant's billboards
+            const { data, error } = await supabase
+                .from('saved_offers')
+                .select(`
+                    id,
+                    redemption_code,
+                    redeemed_at,
+                    campaigns:campaign_id (
+                        title,
+                        business_name,
+                        discount
+                    )
+                `)
+                .eq('is_redeemed', true)
+                .order('redeemed_at', { ascending: false })
+                .limit(10)
+
+            if (error) throw error
+            setHistory(data || [])
+        } catch (error) {
+            console.error('Error fetching history:', error)
+        } finally {
+            setLoadingHistory(false)
         }
-    }
-
-    const handleError = (err) => {
-        console.error('Camera Error:', err)
-        setCameraLoading(false)
     }
 
     const processCode = async (rawCode) => {
@@ -29,206 +52,234 @@ export default function Scanner() {
         setMessage('')
 
         try {
-            // Validation: Allow 36-char UUID (QR) OR 6-char Alphanumeric (Manual)
-            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(code);
             const isShortCode = /^[a-z0-9]{6}$/i.test(code);
-
-            if (!isUUID && !isShortCode) {
-                throw new Error('Invalid format. Scan a QR or enter a 6-digit code.')
+            if (!isShortCode) {
+                throw new Error('Invalid format. Please enter a valid 6-digit coupon code.')
             }
 
-            console.log(`🔍 Attempting redemption for: ${code} (Type: ${isUUID ? 'UUID' : 'ShortCode'})`);
-
             const { data, error } = await supabase.rpc('redeem_coupon', {
-                p_code: code.toUpperCase() // Ensure uppercase for short codes
+                p_code: code.toUpperCase()
             })
 
             if (error) throw error
 
             if (data && data.success) {
-                console.log('✅ Redemption Success:', data);
                 setStatus('success')
                 setMessage(data) 
                 setManualCode('')
+                
+                // Live prepend to history
+                const newEntry = {
+                    id: Math.random().toString(), // Temp ID for list
+                    redemption_code: code.toUpperCase(),
+                    redeemed_at: new Date().toISOString(),
+                    campaigns: {
+                        title: data.offer_details.title,
+                        business_name: data.offer_details.business,
+                        discount: data.offer_details.discount
+                    }
+                }
+                setHistory(prev => [newEntry, ...prev.slice(0, 9)])
+
                 setTimeout(() => {
                     setStatus('idle')
                     setMessage('')
-                }, 5000)
+                }, 8000)
             } else {
-                console.warn('❌ Redemption Failed:', data?.error);
-                throw new Error(data?.error || 'Redemption failed. Code might be invalid or expired.')
+                throw new Error(data?.error || 'Redemption failed.')
             }
 
         } catch (error) {
-            console.error('⚠️ Verification Error:', error.message);
             setStatus('error')
             setMessage(error.message)
             setTimeout(() => {
                 setStatus('idle')
                 setMessage('')
-            }, 4000)
+            }, 5000)
         }
     }
 
     return (
-        <div className="container" style={{ maxWidth: '600px' }}>
+        <div className="container" style={{ maxWidth: '1200px' }}>
             <header style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <div style={{ padding: '0.75rem', background: 'var(--primary)', borderRadius: '12px' }}>
-                        <Scan color="white" size={24} />
+                        <ClipboardCheck color="white" size={24} />
                     </div>
                     <div>
-                        <h1 style={{ fontSize: '1.5rem', margin: 0 }}>Coupon Scanner</h1>
-                        <p className="text-muted">Verify and redeem customer codes</p>
+                        <h1 style={{ fontSize: '1.5rem', margin: 0 }}>Coupon Verification</h1>
+                        <p className="text-muted">Manually verify and track customer redemptions</p>
                     </div>
                 </div>
             </header>
 
-            <div className="card" style={{ padding: '1rem', overflow: 'hidden', textAlign: 'center' }}>
-
-                {/* Status Overlays */}
-                {status === 'processing' && (
-                    <div className="flex-center" style={{ padding: '3rem', flexDirection: 'column', gap: '1rem' }}>
-                        <Loader2 className="animate-spin" size={48} color="var(--primary)" />
-                        <p style={{ fontWeight: '500' }}>Verifying Redemption...</p>
-                    </div>
-                )}
-
-                {status === 'success' && (
-                    <div className="flex-center" style={{ padding: '2rem', flexDirection: 'column', gap: '1.5rem', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '16px', border: '2px solid var(--success)' }}>
-                        <div style={{ background: 'var(--success)', padding: '1rem', borderRadius: '50%' }}>
-                            <CheckCircle size={40} color="white" />
+            <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: '1fr 350px', 
+                gap: '2rem',
+                alignItems: 'start'
+            }}>
+                
+                {/* ---------- MAIN: VERIFICATION AREA ---------- */}
+                <div className="card" style={{ padding: '1.5rem', textAlign: 'center', minHeight: '500px' }}>
+                    {status === 'processing' && (
+                        <div className="flex-center" style={{ padding: '3rem', flexDirection: 'column', gap: '1rem' }}>
+                            <Loader2 className="animate-spin" size={48} color="var(--primary)" />
+                            <p style={{ fontWeight: '500' }}>Verifying Redemption...</p>
                         </div>
-                        <div>
-                            <h2 style={{ color: 'var(--success)', margin: '0 0 0.5rem 0', fontSize: '1.5rem' }}>Redeemed Successfully!</h2>
-                            <p style={{ color: 'var(--text-muted)', margin: 0 }}>{message.message}</p>
-                        </div>
-                        
-                        <div style={{ width: '100%', background: 'white', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border)', textAlign: 'left' }}>
-                            <p style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem', fontWeight: 'bold' }}>Offer Details</p>
-                            <p style={{ fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.25rem' }}>{message.offer_details?.title}</p>
-                            <p style={{ color: 'var(--primary)', fontWeight: '600' }}>{message.offer_details?.business}</p>
-                            {message.offer_details?.discount && (
-                                <div style={{ marginTop: '0.75rem', display: 'inline-block', padding: '4px 12px', background: '#F3E8FF', color: '#7E22CE', borderRadius: '20px', fontSize: '0.875rem', fontWeight: 'bold' }}>
-                                    {message.offer_details.discount}
-                                </div>
-                            )}
-                        </div>
-                        <p className="text-sm">Transaction recorded in real-time</p>
-                    </div>
-                )}
+                    )}
 
-                {status === 'error' && (
-                    <div className="flex-center" style={{ padding: '3rem', flexDirection: 'column', gap: '1rem', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '16px', border: '1px dashed var(--danger)' }}>
-                        <XCircle size={64} color="var(--danger)" />
-                        <h2 style={{ color: 'var(--danger)', margin: 0 }}>Validation Failed</h2>
-                        <p style={{ fontWeight: '500' }}>{message}</p>
-                        <button 
-                            className="btn-secondary" 
-                            style={{ marginTop: '1rem' }}
-                            onClick={() => setStatus('idle')}
-                        >
-                            Try Again
-                        </button>
-                    </div>
-                )}
-
-                {/* Main Interaction Area */}
-                {status === 'idle' && (
-                    <>
-                        <div style={{ 
-                            position: 'relative', 
-                            overflow: 'hidden', 
-                            borderRadius: '16px', 
-                            background: '#000', 
-                            height: '350px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            marginBottom: '1.5rem',
-                            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)'
-                        }}>
-                            {cameraLoading && (
-                                <div className="flex-center" style={{ position: 'absolute', zIndex: 5, flexDirection: 'column', gap: '1rem' }}>
-                                    <Loader2 className="animate-spin" size={32} color="white" />
-                                    <p style={{ color: 'white', fontSize: '0.875rem' }}>Scanning for QR Code...</p>
-                                </div>
-                            )}
+                    {status === 'success' && (
+                        <div className="flex-center" style={{ padding: '2rem', flexDirection: 'column', gap: '1.5rem', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '24px', border: '2px solid var(--success)' }}>
+                            <div style={{ background: 'var(--success)', padding: '1rem', borderRadius: '50%', boxShadow: '0 0 30px rgba(16, 185, 129, 0.3)' }}>
+                                <CheckCircle size={48} color="white" />
+                            </div>
+                            <div>
+                                <h2 style={{ color: 'var(--success)', margin: '0 0 0.5rem 0', fontSize: '1.75rem' }}>Verified Successfully!</h2>
+                                <p style={{ color: 'var(--text-muted)', margin: 0, fontWeight: '500' }}>{message.message}</p>
+                            </div>
                             
-                            <QrScanner
-                                onScan={handleScan}
-                                onError={handleError}
-                                onLoad={() => setCameraLoading(false)}
-                                constraints={{ facingMode: 'environment' }}
-                                styles={{ 
-                                    container: { width: '100%', height: '100%' },
-                                    video: { width: '100%', height: '100%', objectFit: 'cover' }
-                                }}
-                            />
-
-                            <div style={{
-                                position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                                background: 'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(139, 92, 246, 0.2) 50%, rgba(0,0,0,0) 100%)',
-                                pointerEvents: 'none',
-                                animation: 'scan 3s linear infinite',
-                                zIndex: 10
-                            }}></div>
+                            <div style={{ width: '100%', background: 'white', padding: '1.5rem', borderRadius: '16px', border: '1px solid var(--border)', textAlign: 'left' }}>
+                                <p style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.75rem', fontWeight: 'bold' }}>Offer Details</p>
+                                <p style={{ fontWeight: '800', fontSize: '1.25rem', marginBottom: '0.25rem' }}>{message.offer_details?.title}</p>
+                                <p style={{ color: 'var(--primary)', fontWeight: '700' }}>{message.offer_details?.business}</p>
+                                {message.offer_details?.discount && (
+                                    <div style={{ marginTop: '1rem', display: 'inline-block', padding: '6px 16px', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--primary)', borderRadius: '100px', fontSize: '0.875rem', fontWeight: 'bold' }}>
+                                        {message.offer_details.discount} Saving applied
+                                    </div>
+                                )}
+                            </div>
+                            
+                            <button className="btn-secondary" onClick={() => setStatus('idle')} style={{ width: '100%' }}>
+                                Confirm & Next Service
+                            </button>
                         </div>
+                    )}
 
-                        {/* Manual Entry Section */}
-                        <div style={{ 
-                            borderTop: '1px solid var(--border)', 
-                            paddingTop: '1.5rem',
-                            marginBottom: '1.5rem'
-                        }}>
-                            <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem', fontWeight: '500' }}>
-                                OR ENTER 6-DIGIT CODE MANUALLY
-                            </p>
-                            <div style={{ display: 'flex', gap: '0.75rem' }}>
-                                <input 
-                                    type="text" 
-                                    placeholder="E.G. A1B2C3"
-                                    maxLength={6}
-                                    value={manualCode}
-                                    onChange={(e) => setManualCode(e.target.value.toUpperCase())}
-                                    style={{ 
-                                        flex: 1, 
-                                        fontSize: '1.25rem', 
-                                        textAlign: 'center', 
-                                        letterSpacing: '4px',
-                                        fontWeight: 'bold',
-                                        textTransform: 'uppercase',
-                                        padding: '0.75rem',
-                                        borderRadius: '12px',
-                                        border: '2px solid var(--border)'
-                                    }}
-                                />
-                                <button 
-                                    className="btn-primary"
-                                    disabled={manualCode.length !== 6}
-                                    onClick={() => processCode(manualCode)}
-                                    style={{ padding: '0 1.5rem' }}
-                                >
-                                    Verify Code
-                                </button>
+                    {status === 'error' && (
+                        <div className="flex-center" style={{ padding: '3rem', flexDirection: 'column', gap: '1.5rem', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '24px', border: '1px dashed var(--danger)' }}>
+                            <XCircle size={64} color="var(--danger)" />
+                            <h2 style={{ color: 'var(--danger)', margin: 0 }}>Redemption Failed</h2>
+                            <p style={{ fontWeight: '500' }}>{message}</p>
+                            <button className="btn-primary" style={{ background: 'var(--danger)', border: 'none' }} onClick={() => setStatus('idle')}>
+                                Try Different Code
+                            </button>
+                        </div>
+                    )}
+
+                    {status === 'idle' && (
+                        <div style={{ padding: '1rem 0' }}>
+                            <div style={{ 
+                                background: 'rgba(139, 92, 246, 0.03)',
+                                padding: '2.5rem',
+                                borderRadius: '24px',
+                                border: '1px solid var(--border)',
+                                marginBottom: '2rem'
+                            }}>
+                                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1.5rem', fontWeight: '700', letterSpacing: '0.1em' }}>
+                                    ENTER CUSTOMER REDEMPTION CODE
+                                </p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                                    <input 
+                                        type="text" 
+                                        placeholder="E.G. A1B2C3"
+                                        maxLength={6}
+                                        autoFocus
+                                        value={manualCode}
+                                        onChange={(e) => setManualCode(e.target.value.toUpperCase())}
+                                        style={{ 
+                                            width: '100%', fontSize: '2.5rem', textAlign: 'center', letterSpacing: '12px', fontWeight: '900',
+                                            textTransform: 'uppercase', padding: '1.5rem', borderRadius: '20px', background: 'white',
+                                            border: '2px solid var(--primary)', color: 'var(--primary)', boxShadow: '0 10px 30px rgba(139, 92, 246, 0.15)', outline: 'none'
+                                        }}
+                                    />
+                                    <button 
+                                        className="btn-primary"
+                                        disabled={manualCode.length !== 6}
+                                        onClick={() => processCode(manualCode)}
+                                        style={{ padding: '1.5rem', fontSize: '1.1rem', borderRadius: '16px' }}
+                                    >
+                                        Verify & Complete Transaction
+                                    </button>
+                                </div>
+                            </div>
+                            <div style={{ textAlign: 'left', background: 'var(--surface)', padding: '1.5rem', borderRadius: '16px', border: '1px solid var(--border)' }}>
+                                <h3 style={{ fontSize: '0.9rem', marginBottom: '1rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: '800' }}>Verification Guidelines</h3>
+                                <ul className="text-muted text-sm" style={{ paddingLeft: '1.25rem' }}>
+                                    <li style={{ marginBottom: '0.6rem' }}>Confirm the code exactly as shown on the user's phone.</li>
+                                    <li>Success automatically logs the sale in your Performance Dashboard.</li>
+                                </ul>
                             </div>
                         </div>
-                    </>
-                )}
-
-                <div style={{ textAlign: 'left', background: 'var(--surface)', padding: '1.25rem', borderRadius: '12px' }}>
-                    <h3 style={{ fontSize: '0.875rem', marginBottom: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 'bold' }}>Instructions</h3>
-                    <ul className="text-muted text-sm" style={{ paddingLeft: '1.25rem' }}>
-                        <li style={{ marginBottom: '0.4rem' }}>Scan the customer's QR code from their app.</li>
-                        <li style={{ marginBottom: '0.4rem' }}>If scanning fails, type the 6-digit code shown below the QR.</li>
-                        <li>Verify the offer details before providing the discount.</li>
-                    </ul>
+                    )}
                 </div>
+
+                {/* ---------- ASIDE: RECENT HISTORY ---------- */}
+                <aside style={{ height: 'calc(100vh - 180px)', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', padding: '0 0.5rem' }}>
+                        <History size={18} className="text-muted" />
+                        <h3 style={{ fontSize: '1rem', margin: 0 }}>Recent Redemptions</h3>
+                        <div style={{ marginLeft: 'auto', background: 'var(--surface)', padding: '2px 8px', borderRadius: '10px', fontSize: '0.75rem', fontWeight: 'bold' }}>{history.length}</div>
+                    </div>
+
+                    <div style={{ 
+                        flex: 1, 
+                        overflowY: 'auto', 
+                        paddingRight: '0.5rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.75rem'
+                    }}>
+                        {loadingHistory ? (
+                            <div className="flex-center" style={{ height: '200px' }}>
+                                <Loader2 className="animate-spin text-muted" size={24} />
+                            </div>
+                        ) : history.length === 0 ? (
+                            <div className="card-subtle" style={{ padding: '2rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+                                <div style={{ background: 'rgba(255,255,255,0.05)', padding: '15px', borderRadius: '50%' }}>
+                                    <Tag className="text-muted" size={32} strokeWidth={1} />
+                                </div>
+                                <p className="text-muted text-sm">No redemptions found. Verified coupons will appear here.</p>
+                            </div>
+                        ) : (
+                            history.map((item, idx) => (
+                                <div key={item.id} className="card" style={{ 
+                                    padding: '1rem', 
+                                    animation: idx === 0 ? 'popIn 0.5s ease-out' : 'none',
+                                    borderLeft: `3px solid ${idx === 0 ? 'var(--success)' : 'var(--border)'}`,
+                                    position: 'relative',
+                                    background: idx === 0 ? 'rgba(16, 185, 129, 0.02)' : 'var(--bg-card)'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
+                                        <p style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text)' }}>{item.campaigns.business_name}</p>
+                                        <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                            <Calendar size={10} />
+                                            {new Date(item.redeemed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        </p>
+                                    </div>
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: '600', marginBottom: '0.25rem' }}>{item.campaigns.title}</p>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>{item.redemption_code}</p>
+                                        {item.campaigns.discount && (
+                                            <span style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--success)' }}>{item.campaigns.discount}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </aside>
             </div>
+
             <style>{`
-                @keyframes scan {
-                    0% { transform: translateY(-100%); }
-                    100% { transform: translateY(100%); }
+                @keyframes popIn {
+                    0% { transform: scale(0.9); opacity: 0; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+                .card-subtle {
+                    background: rgba(255,255,255,0.02);
+                    border: 1px dashed var(--border);
+                    border-radius: 12px;
                 }
             `}</style>
         </div>

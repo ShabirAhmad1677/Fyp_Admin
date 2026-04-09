@@ -40,9 +40,9 @@ export default function Insights() {
 
             if (data) {
                 // Calculate Totals - Senior Upgrade: Support both legacy and mobile-sync labels
-                const views = data.filter(e => ['view', 'map_view'].includes(e.event_type)).length
+                const views = data.filter(e => ['view', 'map_view', 'proximity'].includes(e.event_type)).length
                 const qualityViews = data.filter(e => e.event_type === 'ar_view_3s').length
-                const clicks = data.filter(e => ['click', 'tap', 'proximity', 'save'].includes(e.event_type)).length
+                const clicks = data.filter(e => ['click', 'tap', 'save'].includes(e.event_type)).length
                 const ctr = views > 0 ? ((clicks / views) * 100).toFixed(1) : 0
 
                 setStats({ views, clicks, ctr, quality_views: qualityViews })
@@ -64,8 +64,8 @@ export default function Insights() {
                     const date = e.created_at.split('T')[0]
                     const dayStat = last7Days.find(d => d.date === date)
                     if (dayStat) {
-                        if (['view', 'map_view'].includes(e.event_type)) dayStat.views++
-                        if (['click', 'tap', 'proximity', 'save'].includes(e.event_type)) dayStat.clicks++
+                        if (['view', 'map_view', 'proximity'].includes(e.event_type)) dayStat.views++
+                        if (['click', 'tap', 'save'].includes(e.event_type)) dayStat.clicks++
                     }
                 })
 
