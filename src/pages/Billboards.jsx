@@ -27,9 +27,13 @@ export default function Billboards() {
         image_target_url: '',
         physical_width: '1.0',
         cloud_anchor_id: '',
-        glb_asset_url: ''
+        glb_asset_url: '',
+        website_url: '',
+        business_logo_url: '',
+        media_url: ''
     })
     const [imageFile, setImageFile] = useState(null)
+    const [logoFile, setLogoFile] = useState(null)
     const [targetFile, setTargetFile] = useState(null)
     const [glbFile, setGlbFile] = useState(null)
     const [editingId, setEditingId] = useState(null)
@@ -77,11 +81,13 @@ export default function Billboards() {
                     business: active?.business_name || 'N/A',
                     title: active?.title || 'Untitled',
                     image_url: active?.media_url || '',
+                    business_logo_url: active?.business_logo_url || '',
                     full_description: active?.description || '',
                     contact: active?.contact || '',
                     features: active?.features || [],
                     hours: active?.hours || '',
                     discount: active?.discount || '',
+                    website_url: active?.website_url || '',
                     views: viewCounts[b.id] || 0, // Actual live count
                     is_active: active ? active.is_active : b.is_active // Use campaign status or fallback to billboard status
                 }
@@ -199,7 +205,29 @@ export default function Billboards() {
                 glbUrl = glbData.publicUrl
             }
 
+            let logoUrl = null
+            // 4. Upload Business Logo
+            if (logoFile) {
+                const fileExt = logoFile.name.split('.').pop()
+                const fileName = `${Date.now()}-logo.${fileExt}`
+                const { error: logoError } = await supabase.storage
+                    .from('billboards')
+                    .upload(`logos/${fileName}`, logoFile)
+
+                if (logoError) throw logoError
+                const { data: logoData } = supabase.storage.from('billboards').getPublicUrl(`logos/${fileName}`)
+                logoUrl = logoData.publicUrl
+            }
+
+            // Detect Media Type
+            const media_type = imageFile?.type?.startsWith('video/') ? 'video' : 'image';
+
             // --- Phase 1: ATOMIC TRANSACTION (RPC) ---
+            const finalMediaUrl = publicUrl || form.media_url;
+            const finalTargetUrl = targetUrl || form.image_target_url;
+            const finalGlbUrl = glbUrl || form.glb_asset_url;
+            const finalLogoUrl = logoUrl || form.business_logo_url;
+
             const { data: billboardId, error: rpcError } = await supabase.rpc('publish_billboard_with_campaign', {
                 p_billboard_id: editingId, // null for new
                 p_owner_id: user.id,
@@ -208,18 +236,21 @@ export default function Billboards() {
                 p_address: `${form.city}, Pakistan`,
                 p_city: form.city,
                 p_category: form.category,
-                p_image_target_url: targetUrl || (editingId ? undefined : ''),
+                p_image_target_url: finalTargetUrl,
                 p_physical_width: parseFloat(form.physical_width || '1.0'),
                 p_cloud_anchor_id: form.cloud_anchor_id || null,
-                p_glb_asset_url: glbUrl || form.glb_asset_url || null,
+                p_glb_asset_url: finalGlbUrl,
+                p_media_type: media_type,
                 p_business_name: form.business,
+                p_business_logo_url: finalLogoUrl,
                 p_title: form.title,
                 p_description: form.full_description,
-                p_media_url: publicUrl || (editingId ? undefined : ''), // Keep old media if no new upload
+                p_media_url: finalMediaUrl,
                 p_discount: form.discount,
                 p_features: form.features ? form.features.split(',').map(f => f.trim()).filter(f => f) : [],
                 p_hours: form.hours,
-                p_contact: form.contact
+                p_contact: form.contact,
+                p_website_url: form.website_url
             })
 
             if (rpcError) throw new Error(`Save Failed: ${rpcError.message}`)
@@ -239,8 +270,9 @@ export default function Billboards() {
     }
 
     const resetForm = () => {
-        setForm({ title: '', business: '', category: 'Retail', city: 'Mardan', latitude: '', longitude: '', full_description: '', contact: '', features: '', hours: '', discount: '', image_target_url: '', physical_width: '1.0', cloud_anchor_id: '', glb_asset_url: '' })
+        setForm({ title: '', business: '', category: 'Retail', city: 'Mardan', latitude: '', longitude: '', full_description: '', contact: '', features: '', hours: '', discount: '', image_target_url: '', physical_width: '1.0', cloud_anchor_id: '', glb_asset_url: '', website_url: '', business_logo_url: '', media_url: '' })
         setImageFile(null)
+        setLogoFile(null)
         setTargetFile(null)
         setGlbFile(null)
         setEditingId(null)
@@ -263,7 +295,10 @@ export default function Billboards() {
             physical_width: billboard.physical_width || '1.0',
             image_target_url: billboard.image_target_url || '',
             cloud_anchor_id: billboard.cloud_anchor_id || '',
-            glb_asset_url: billboard.glb_asset_url || ''
+            glb_asset_url: billboard.glb_asset_url || '',
+            website_url: billboard.website_url || '',
+            business_logo_url: billboard.business_logo_url || '',
+            media_url: billboard.image_url || ''
         })
         setShowModal(true)
     }
@@ -418,8 +453,18 @@ export default function Billboards() {
                                             <label className="text-sm text-muted">Business Name</label>
                                             <input required value={form.business} onChange={e => setForm({ ...form, business: e.target.value })} placeholder="e.g. Urban Kicks" />
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                            <div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <label className="text-sm text-muted">Business Logo</label>
+                                                <div 
+                                                    style={{ border: '1px dashed var(--border)', borderRadius: '8px', padding: '0.5rem', cursor: 'pointer', textAlign: 'center', background: 'rgba(0,0,0,0.1)' }}
+                                                    onClick={() => document.getElementById('logoUpload').click()}
+                                                >
+                                                    {logoFile ? <span className="text-sm">{logoFile.name}</span> : form.business_logo_url ? <img src={form.business_logo_url} style={{ height: '30px', borderRadius: '4px' }} /> : <span className="text-xs text-muted">Click to Upload Logo</span>}
+                                                    <input id="logoUpload" type="file" accept="image/*" hidden onChange={(e) => setLogoFile(e.target.files[0])} />
+                                                </div>
+                                            </div>
+                                            <div style={{ flex: 1 }}>
                                                 <label className="text-sm text-muted">Category</label>
                                                 <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
                                                     <option>Retail</option>
@@ -429,6 +474,8 @@ export default function Billboards() {
                                                     <option>Entertainment</option>
                                                 </select>
                                             </div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                             <div>
                                                 <label className="text-sm text-muted">Promo Badge (e.g. 20% OFF)</label>
                                                 <input value={form.discount} onChange={e => setForm({ ...form, discount: e.target.value })} placeholder="15% OFF, New!" />
@@ -452,9 +499,13 @@ export default function Billboards() {
                                                 <input value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="0312-3456789" />
                                             </div>
                                             <div>
-                                                <label className="text-sm text-muted">Business Hours</label>
-                                                <input value={form.hours} onChange={e => setForm({ ...form, hours: e.target.value })} placeholder="9 AM - 10 PM" />
+                                                <label className="text-sm text-muted">Website URL</label>
+                                                <input value={form.website_url} onChange={e => setForm({ ...form, website_url: e.target.value })} placeholder="https://example.com" />
                                             </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-muted">Business Hours</label>
+                                            <input value={form.hours} onChange={e => setForm({ ...form, hours: e.target.value })} placeholder="9 AM - 10 PM" />
                                         </div>
                                     </div>
 

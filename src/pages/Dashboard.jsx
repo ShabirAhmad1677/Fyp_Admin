@@ -75,12 +75,17 @@ export default function Dashboard() {
 
             if (offerError) console.error('❌ Supabase Error fetching offers:', offerError.message)
 
-            // 3. Fetch analytics
+            // 3. Fetch analytics (Resilient 30-day filter)
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            thirtyDaysAgo.setUTCHours(0, 0, 0, 0); // Reset to midnight UTC to prevent "Ghosting" due to PKT lag
+            const filterDate = thirtyDaysAgo.toISOString();
+
             const { data: analytics, error: analyticsError } = await supabase
                 .from('analytics_events')
                 .select('event_type, created_at, billboard_id')
                 .in('billboard_id', billboardIds.length > 0 ? billboardIds : ['00000000-0000-0000-0000-000000000000'])
-                .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+                .gte('created_at', filterDate)
 
             if (analyticsError) console.error('❌ Supabase Error fetching analytics:', analyticsError.message)
 
